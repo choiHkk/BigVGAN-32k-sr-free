@@ -63,3 +63,5 @@ display(
     )
 )
 ```
+* reference
+    - [jinwonkim93's bigvgan](https://github.com/jinwonkim93/BigVGAN)
