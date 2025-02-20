@@ -63,6 +63,8 @@ display(
     )
 )
 ```
+<img width="1408" alt="image" src="https://github.com/user-attachments/assets/17b6f177-a2cd-4ed7-b0ac-50e095981f70" />
+
 * reference
     - [jinwonkim93's bigvgan](https://github.com/jinwonkim93/BigVGAN)
     - [cosyvoice2](https://github.com/FunAudioLLM/CosyVoice)
