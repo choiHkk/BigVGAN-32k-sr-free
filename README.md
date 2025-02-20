@@ -14,7 +14,7 @@ generator.save_pretrained("./pretrained_models/test")
 ```python
 from inference import BigVGANVocoder
 
-vocoder = BigVGANVocoder.from_pretrained("./pretrained_models/test")
+vocoder = BigVGANVocoder.from_pretrained("choihkk/BigVGAN-32k-sr-free")
 vocoder = vocoder.cuda()
 ```
 ```python
