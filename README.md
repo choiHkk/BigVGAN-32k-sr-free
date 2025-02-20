@@ -6,7 +6,7 @@ from utils import load_checkpoint
 h = load_hparams_from_json("configs/bigvgan_reference.json")
 generator = BigVGAN(h)
 
-state_dict_g = load_checkpoint("./exp/test_v4/g_01000000", "cpu")
+state_dict_g = load_checkpoint("./exp/test_v1/g_01000000", "cpu")
 generator.load_state_dict(state_dict_g["generator"])
 generator.remove_weight_norm()
 generator.save_pretrained("./pretrained_models/test")
