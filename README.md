@@ -65,3 +65,5 @@ display(
 ```
 * reference
     - [jinwonkim93's bigvgan](https://github.com/jinwonkim93/BigVGAN)
+    - [cosyvoice2](https://github.com/FunAudioLLM/CosyVoice)
+        - Can serve as a replacement for cosyvoice2 vocoder
