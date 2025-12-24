@@ -1,19 +1,23 @@
-# Copyright (c) 2024 NVIDIA CORPORATION.
-#   Licensed under the MIT license.
+"""Loss functions for BigVGAN training.
 
-# Adapted from https://github.com/jik876/hifi-gan under the MIT license.
-#   LICENSE is in incl_licenses directory.
+This module provides various loss functions used during GAN-based vocoder
+training, including mel spectrogram losses, feature matching losses,
+and adversarial losses for both discriminator and generator.
 
+Copyright (c) 2024 NVIDIA CORPORATION. Licensed under the MIT license.
+
+Adapted from https://github.com/jik876/hifi-gan under the MIT license.
+LICENSE is in incl_licenses directory.
+"""
 
 import functools
 import math
 import typing
 from collections import namedtuple
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from librosa.filters import mel as librosa_mel_fn
 from scipy import signal
 
@@ -98,11 +102,32 @@ class MultiScaleMelSpectrogramLoss(nn.Module):
         window_type,
         window_length,
     ):
+        """Get a cached window function.
+
+        Args:
+            window_type: Type of window (e.g., 'hann', 'hamming').
+            window_length: Length of the window in samples.
+
+        Returns:
+            np.ndarray: Window function values.
+        """
         return signal.get_window(window_type, window_length)
 
     @staticmethod
     @functools.lru_cache(None)
     def get_mel_filters(sr, n_fft, n_mels, fmin, fmax):
+        """Get cached mel filterbank.
+
+        Args:
+            sr: Sampling rate.
+            n_fft: FFT size.
+            n_mels: Number of mel bands.
+            fmin: Minimum frequency.
+            fmax: Maximum frequency.
+
+        Returns:
+            np.ndarray: Mel filterbank matrix.
+        """
         return librosa_mel_fn(sr=sr, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax)
 
     def mel_spectrogram(
@@ -123,9 +148,9 @@ class MultiScaleMelSpectrogramLoss(nn.Module):
         B, C, T = wav.shape
 
         if match_stride:
-            assert (
-                hop_length == window_length // 4
-            ), "For match_stride, hop must equal n_fft // 4"
+            assert hop_length == window_length // 4, (
+                "For match_stride, hop must equal n_fft // 4"
+            )
             right_pad = math.ceil(T / hop_length) * hop_length - T
             pad = (window_length - hop_length) // 2
         else:
@@ -214,7 +239,20 @@ class MultiScaleMelSpectrogramLoss(nn.Module):
 def feature_loss(
     fmap_r: List[List[torch.Tensor]], fmap_g: List[List[torch.Tensor]]
 ) -> torch.Tensor:
+    """Compute feature matching loss between real and generated feature maps.
 
+    Calculates L1 distance between intermediate feature representations
+    from discriminator layers.
+
+    Args:
+        fmap_r: Feature maps from discriminator for real audio.
+            List of lists of tensors from each discriminator layer.
+        fmap_g: Feature maps from discriminator for generated audio.
+            List of lists of tensors from each discriminator layer.
+
+    Returns:
+        torch.Tensor: Weighted feature matching loss (lambda=2.0).
+    """
     loss = 0
     for dr, dg in zip(fmap_r, fmap_g):
         for rl, gl in zip(dr, dg):
@@ -226,7 +264,18 @@ def feature_loss(
 def discriminator_loss(
     disc_real_outputs: List[torch.Tensor], disc_generated_outputs: List[torch.Tensor]
 ) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+    """Compute discriminator loss using least squares GAN formulation.
 
+    Args:
+        disc_real_outputs: Discriminator outputs for real audio.
+        disc_generated_outputs: Discriminator outputs for generated audio.
+
+    Returns:
+        Tuple containing:
+            - Total discriminator loss.
+            - List of individual real losses per discriminator.
+            - List of individual generated losses per discriminator.
+    """
     loss = 0
     r_losses = []
     g_losses = []
@@ -243,12 +292,23 @@ def discriminator_loss(
 def generator_loss(
     disc_outputs: List[torch.Tensor],
 ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+    """Compute generator adversarial loss using least squares GAN formulation.
 
+    The generator tries to make discriminator outputs close to 1.
+
+    Args:
+        disc_outputs: Discriminator outputs for generated audio.
+
+    Returns:
+        Tuple containing:
+            - Total generator loss.
+            - List of individual losses per discriminator.
+    """
     loss = 0
     gen_losses = []
     for dg in disc_outputs:
-        l = torch.mean((1 - dg) ** 2)
-        gen_losses.append(l)
-        loss += l
+        _loss = torch.mean((1 - dg) ** 2)
+        gen_losses.append(_loss)
+        loss += _loss
 
     return loss, gen_losses

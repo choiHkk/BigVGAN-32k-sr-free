@@ -1,38 +1,69 @@
-# Copyright (c) 2024 NVIDIA CORPORATION.
-#   Licensed under the MIT license.
+"""Mel spectrogram dataset utilities for BigVGAN training.
 
-# Adapted from https://github.com/jik876/hifi-gan under the MIT license.
-#   LICENSE is in incl_licenses directory.
+This module provides dataset loading, audio preprocessing, and mel spectrogram
+computation functions used during BigVGAN training and evaluation.
+
+Copyright (c) 2024 NVIDIA CORPORATION. Licensed under the MIT license.
+
+Adapted from https://github.com/jik876/hifi-gan under the MIT license.
+LICENSE is in incl_licenses directory.
+"""
 
 import io
-import math
 import os
-import pathlib
 import random
-from typing import List, Optional, Tuple
 
+import logging
 import datasets
 import librosa
 import numpy as np
 import torch
 import torch.utils.data
-import torchaudio
 from librosa.filters import mel as librosa_mel_fn
 from pydub import AudioSegment
-from tqdm import tqdm
 
-from env import AttrDict
 
-MAX_WAV_VALUE = 32767.0  # NOTE: 32768.0 -1 to prevent int16 overflow (results in popping sound in corner cases)
+#: Maximum value for 16-bit audio normalization (32767 to prevent int16 overflow).
+MAX_WAV_VALUE = 32767.0
 
 
 class Collator:
+    """Custom collator for batching audio samples during training.
+
+    Handles audio loading, resampling, chunking, and mel spectrogram
+    computation for both training and validation splits.
+
+    Args:
+        h: Hyperparameters AttrDict containing audio processing settings.
+        split: If True, randomly crops audio to segment_size. If False,
+            uses full audio (for validation). Defaults to True.
+
+    Attributes:
+        h: Hyperparameters dictionary.
+        split: Whether to split audio into random chunks.
+        use_reference_encoder: Whether reference encoder is enabled.
+    """
+
     def __init__(self, h, split=True):
+        """Initialize the Collator.
+
+        Args:
+            h: Hyperparameters AttrDict.
+            split: Whether to split audio into random chunks. Defaults to True.
+        """
         self.h = h
         self.split = split
         self.use_reference_encoder = self.h.get("use_reference_encoder", False)
 
     def __call__(self, samples):
+        """Collate batch of audio samples into tensors.
+
+        Args:
+            samples: List of sample dictionaries containing audio bytes.
+
+        Returns:
+            Tuple[torch.Tensor, ...]: Batch of (mel, reference_mel, audio, mel_loss).
+        """
         mel_batch = []
         audio_batch = []
         mel_loss_batch = []
@@ -50,7 +81,8 @@ class Collator:
                     )
                     source_sampling_rate = self.h.sampling_rate
 
-            except:
+            except Exception as e:
+                logging.error(f"Error loading audio from bytes: {e}")
                 audio = 2 * np.random.rand(self.h.sampling_rate) - 1
                 source_sampling_rate = self.h.sampling_rate
 
@@ -202,6 +234,15 @@ class Collator:
 
 
 def load_audio_from_bytes(audio_samples):
+    """Load and normalize audio from byte data.
+
+    Args:
+        audio_samples: Raw audio bytes in a supported format.
+
+    Returns:
+        Tuple[np.ndarray, int]: Normalized audio waveform as float32 array
+            in range [-1, 1], and the sampling rate.
+    """
     value = AudioSegment.from_file(io.BytesIO(audio_samples))
 
     if value.channels == 2:
@@ -219,26 +260,80 @@ def load_audio_from_bytes(audio_samples):
 
 
 def dynamic_range_compression(x, C=1, clip_val=1e-5):
+    """Apply logarithmic dynamic range compression.
+
+    Args:
+        x: Input array.
+        C: Compression factor. Defaults to 1.
+        clip_val: Minimum value for clipping before log. Defaults to 1e-5.
+
+    Returns:
+        np.ndarray: Compressed array.
+    """
     return np.log(np.clip(x, a_min=clip_val, a_max=None) * C)
 
 
 def dynamic_range_decompression(x, C=1):
+    """Apply dynamic range decompression (inverse of compression).
+
+    Args:
+        x: Compressed input array.
+        C: Compression factor used during compression. Defaults to 1.
+
+    Returns:
+        np.ndarray: Decompressed array.
+    """
     return np.exp(x) / C
 
 
 def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
+    """Apply logarithmic dynamic range compression (PyTorch version).
+
+    Args:
+        x: Input tensor.
+        C: Compression factor. Defaults to 1.
+        clip_val: Minimum value for clipping before log. Defaults to 1e-5.
+
+    Returns:
+        torch.Tensor: Compressed tensor.
+    """
     return torch.log(torch.clamp(x, min=clip_val) * C)
 
 
 def dynamic_range_decompression_torch(x, C=1):
+    """Apply dynamic range decompression (PyTorch version).
+
+    Args:
+        x: Compressed input tensor.
+        C: Compression factor used during compression. Defaults to 1.
+
+    Returns:
+        torch.Tensor: Decompressed tensor.
+    """
     return torch.exp(x) / C
 
 
 def spectral_normalize_torch(magnitudes):
+    """Apply spectral normalization using dynamic range compression.
+
+    Args:
+        magnitudes: Input magnitude spectrogram tensor.
+
+    Returns:
+        torch.Tensor: Normalized spectrogram.
+    """
     return dynamic_range_compression_torch(magnitudes)
 
 
 def spectral_de_normalize_torch(magnitudes):
+    """Apply spectral denormalization using dynamic range decompression.
+
+    Args:
+        magnitudes: Normalized magnitude spectrogram tensor.
+
+    Returns:
+        torch.Tensor: Denormalized spectrogram.
+    """
     return dynamic_range_decompression_torch(magnitudes)
 
 
@@ -319,12 +414,12 @@ def mel_spectrogram(
 
 
 def get_mel_spectrogram(wav, h):
-    """
-    Generate mel spectrogram from a waveform using given hyperparameters.
+    """Generate mel spectrogram from a waveform using given hyperparameters.
 
     Args:
-        wav (torch.Tensor): Input waveform.
-        h: Hyperparameters object with attributes n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax.
+        wav: Input waveform tensor.
+        h: Hyperparameters object with attributes n_fft, num_mels,
+            sampling_rate, hop_size, win_size, fmin, fmax.
 
     Returns:
         torch.Tensor: Mel spectrogram.
@@ -342,11 +437,24 @@ def get_mel_spectrogram(wav, h):
 
 
 def keyword_scandir(
-    dir: str,  # top-level directory at which to begin scanning
-    ext: list,  # list of allowed file extensions
-    keywords: list,  # list of keywords to search for in the file name
+    dir: str,
+    ext: list,
+    keywords: list,
 ):
-    "very fast `glob` alternative. from https://stackoverflow.com/a/59803793/4259243"
+    """Fast recursive directory scan with keyword filtering.
+
+    Scans directory for files matching given extensions and containing
+    specified keywords in their filenames.
+
+    Args:
+        dir: Top-level directory at which to begin scanning.
+        ext: List of allowed file extensions (e.g., ['.wav', '.mp3']).
+        keywords: List of keywords to search for in file names.
+
+    Returns:
+        Tuple[List[str], List[str]]: Lists of subdirectory paths and
+            matching file paths.
+    """
     subfolders, files = [], []
     # make keywords case insensitive
     keywords = [keyword.lower() for keyword in keywords]
@@ -374,10 +482,10 @@ def keyword_scandir(
                         and not os.path.basename(f.path).startswith("._")
                     ):
                         files.append(f.path)
-            except:
-                pass
-    except:
-        pass
+            except Exception as e:
+                logging.error(f"Error scanning file {f.path}: {e}")
+    except Exception as e:
+        logging.error(f"Error scanning directory {dir}: {e}")
 
     for dir in list(subfolders):
         sf, f = keyword_scandir(dir, ext, keywords)
@@ -387,11 +495,21 @@ def keyword_scandir(
 
 
 def fast_scandir(
-    dir: str,  # top-level directory at which to begin scanning
-    ext: list,  # list of allowed file extensions,
-    # max_size = 1 * 1000 * 1000 * 1000 # Only files < 1 GB
+    dir: str,
+    ext: list,
 ):
-    "very fast `glob` alternative. from https://stackoverflow.com/a/59803793/4259243"
+    """Fast recursive directory scan for audio files.
+
+    Scans directory for files matching given extensions.
+
+    Args:
+        dir: Top-level directory at which to begin scanning.
+        ext: List of allowed file extensions (e.g., ['.wav', '.mp3']).
+
+    Returns:
+        Tuple[List[str], List[str]]: Lists of subdirectory paths and
+            matching file paths.
+    """
     subfolders, files = [], []
     ext = [
         "." + x if x[0] != "." else x for x in ext
@@ -407,10 +525,10 @@ def fast_scandir(
 
                     if file_ext in ext and not is_hidden:
                         files.append(f.path)
-            except:
-                pass
-    except:
-        pass
+            except Exception as e:
+                logging.error(f"Error scanning file {f.path}: {e}")
+    except Exception as e:
+        logging.error(f"Error scanning directory {dir}: {e}")
 
     for dir in list(subfolders):
         sf, f = fast_scandir(dir, ext)
@@ -420,15 +538,25 @@ def fast_scandir(
 
 
 def get_audio_filenames(
-    paths: list,  # directories in which to search
+    paths: list,
     keywords=None,
     exts=[".wav", ".mp3", ".flac", ".ogg", ".aif", ".opus"],
 ):
-    "recursively get a list of audio filenames"
+    """Recursively get a list of audio filenames from directories.
+
+    Args:
+        paths: List of directories to search, or a single directory string.
+        keywords: Optional list of keywords to filter filenames.
+            Defaults to None.
+        exts: List of allowed file extensions. Defaults to common audio formats.
+
+    Returns:
+        List[str]: List of matching audio file paths.
+    """
     filenames = []
     if type(paths) is str:
         paths = [paths]
-    for path in paths:  # get a list of relevant filenames
+    for path in paths:
         if keywords is not None:
             subfolders, files = keyword_scandir(path, exts, keywords)
         else:
@@ -438,6 +566,16 @@ def get_audio_filenames(
 
 
 def get_dataset(data_patterns, rank=0, cache_dir=None):
+    """Load and concatenate datasets from webdataset tar files.
+
+    Args:
+        data_patterns: List of directory patterns containing .tar files.
+        rank: Distributed training rank for seeding shuffle. Defaults to 0.
+        cache_dir: Directory for caching datasets. Defaults to None.
+
+    Returns:
+        datasets.Dataset: Shuffled concatenated dataset.
+    """
     trainset = []
     for pattern in data_patterns:
         data_files = get_audio_filenames([pattern], exts=[".tar"])

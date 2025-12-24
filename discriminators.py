@@ -1,12 +1,17 @@
-# Copyright (c) 2024 NVIDIA CORPORATION.
-#   Licensed under the MIT license.
+"""Discriminator architectures for BigVGAN training.
 
-# Adapted from https://github.com/jik876/hifi-gan under the MIT license.
-#   LICENSE is in incl_licenses directory.
+This module provides various discriminator architectures used in GAN-based
+vocoder training, including Multi-Period Discriminator (MPD), Multi-Resolution
+Discriminator (MRD), Multi-Band Discriminator (MBD), and CQT-based discriminators.
 
+Copyright (c) 2024 NVIDIA CORPORATION. Licensed under the MIT license.
+
+Adapted from https://github.com/jik876/hifi-gan under the MIT license.
+LICENSE is in incl_licenses directory.
+"""
 
 import typing
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
@@ -20,6 +25,20 @@ from utils import get_padding
 
 
 class DiscriminatorP(torch.nn.Module):
+    """Period-based sub-discriminator for Multi-Period Discriminator.
+
+    Reshapes 1D audio into 2D based on period and applies 2D convolutions
+    to capture periodic patterns at different time scales.
+
+    Args:
+        h: Hyperparameters AttrDict.
+        period: Period length for reshaping (e.g., 2, 3, 5, 7, 11).
+        kernel_size: Kernel size for convolutions. Defaults to 5.
+        stride: Stride for convolutions. Defaults to 3.
+        use_spectral_norm: Use spectral norm instead of weight norm.
+            Defaults to False.
+    """
+
     def __init__(
         self,
         h: AttrDict,
@@ -87,6 +106,16 @@ class DiscriminatorP(torch.nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+        """Forward pass through period discriminator.
+
+        Args:
+            x: Input audio tensor of shape (B, 1, T).
+
+        Returns:
+            Tuple containing:
+                - Flattened discriminator output.
+                - List of intermediate feature maps.
+        """
         fmap = []
 
         # 1d to 2d
@@ -97,8 +126,8 @@ class DiscriminatorP(torch.nn.Module):
             t = t + n_pad
         x = x.view(b, c, t // self.period, self.period)
 
-        for l in self.convs:
-            x = l(x)
+        for _l in self.convs:
+            x = _l(x)
             x = F.leaky_relu(x, 0.1)
             fmap.append(x)
         x = self.conv_post(x)
@@ -109,6 +138,15 @@ class DiscriminatorP(torch.nn.Module):
 
 
 class MultiPeriodDiscriminator(torch.nn.Module):
+    """Multi-Period Discriminator (MPD) for capturing periodic patterns.
+
+    Applies multiple period-based sub-discriminators with different periods
+    to capture audio patterns at various time scales.
+
+    Args:
+        h: Hyperparameters AttrDict with mpd_reshapes defining periods.
+    """
+
     def __init__(self, h: AttrDict):
         super().__init__()
         self.mpd_reshapes = h.mpd_reshapes
@@ -120,12 +158,27 @@ class MultiPeriodDiscriminator(torch.nn.Module):
             ]
         )
 
-    def forward(self, y: torch.Tensor, y_hat: torch.Tensor) -> Tuple[
+    def forward(
+        self, y: torch.Tensor, y_hat: torch.Tensor
+    ) -> Tuple[
         List[torch.Tensor],
         List[torch.Tensor],
         List[List[torch.Tensor]],
         List[List[torch.Tensor]],
     ]:
+        """Forward pass through all period discriminators.
+
+        Args:
+            y: Real audio tensor of shape (B, 1, T).
+            y_hat: Generated audio tensor of shape (B, 1, T).
+
+        Returns:
+            Tuple containing:
+                - List of discriminator outputs for real audio.
+                - List of discriminator outputs for generated audio.
+                - List of feature maps for real audio.
+                - List of feature maps for generated audio.
+        """
         y_d_rs = []
         y_d_gs = []
         fmap_rs = []
@@ -142,23 +195,31 @@ class MultiPeriodDiscriminator(torch.nn.Module):
 
 
 class DiscriminatorR(nn.Module):
+    """Resolution-based sub-discriminator for Multi-Resolution Discriminator.
+
+    Computes spectrogram at given resolution and applies 2D convolutions
+    to capture spectral patterns.
+
+    Args:
+        cfg: Hyperparameters AttrDict.
+        resolution: List of [n_fft, hop_length, win_length] for STFT.
+    """
+
     def __init__(self, cfg: AttrDict, resolution: List[List[int]]):
         super().__init__()
 
         self.resolution = resolution
-        assert (
-            len(self.resolution) == 3
-        ), f"MRD layer requires list with len=3, got {self.resolution}"
+        assert len(self.resolution) == 3, (
+            f"MRD layer requires list with len=3, got {self.resolution}"
+        )
         self.lrelu_slope = 0.1
 
-        norm_f = weight_norm if cfg.use_spectral_norm == False else spectral_norm
+        norm_f = weight_norm if not cfg.use_spectral_norm else spectral_norm
         if hasattr(cfg, "mrd_use_spectral_norm"):
             print(
                 f"[INFO] overriding MRD use_spectral_norm as {cfg.mrd_use_spectral_norm}"
             )
-            norm_f = (
-                weight_norm if cfg.mrd_use_spectral_norm == False else spectral_norm
-            )
+            norm_f = weight_norm if not cfg.mrd_use_spectral_norm else spectral_norm
         self.d_mult = cfg.discriminator_channel_mult
         if hasattr(cfg, "mrd_channel_mult"):
             print(f"[INFO] overriding mrd channel multiplier as {cfg.mrd_channel_mult}")
@@ -213,8 +274,8 @@ class DiscriminatorR(nn.Module):
 
         x = self.spectrogram(x)
         x = x.unsqueeze(1)
-        for l in self.convs:
-            x = l(x)
+        for _l in self.convs:
+            x = _l(x)
             x = F.leaky_relu(x, self.lrelu_slope)
             fmap.append(x)
         x = self.conv_post(x)
@@ -249,14 +310,16 @@ class MultiResolutionDiscriminator(nn.Module):
     def __init__(self, cfg, debug=False):
         super().__init__()
         self.resolutions = cfg.resolutions
-        assert (
-            len(self.resolutions) == 3
-        ), f"MRD requires list of list with len=3, each element having a list with len=3. Got {self.resolutions}"
+        assert len(self.resolutions) == 3, (
+            f"MRD requires list of list with len=3, each element having a list with len=3. Got {self.resolutions}"
+        )
         self.discriminators = nn.ModuleList(
             [DiscriminatorR(cfg, resolution) for resolution in self.resolutions]
         )
 
-    def forward(self, y: torch.Tensor, y_hat: torch.Tensor) -> Tuple[
+    def forward(
+        self, y: torch.Tensor, y_hat: torch.Tensor
+    ) -> Tuple[
         List[torch.Tensor],
         List[torch.Tensor],
         List[List[torch.Tensor]],
@@ -307,23 +370,26 @@ class DiscriminatorB(nn.Module):
         n_fft = window_length // 2 + 1
         bands = [(int(b[0] * n_fft), int(b[1] * n_fft)) for b in bands]
         self.bands = bands
-        convs = lambda: nn.ModuleList(
-            [
-                weight_norm(nn.Conv2d(2, channels, (3, 9), (1, 1), padding=(1, 4))),
-                weight_norm(
-                    nn.Conv2d(channels, channels, (3, 9), (1, 2), padding=(1, 4))
-                ),
-                weight_norm(
-                    nn.Conv2d(channels, channels, (3, 9), (1, 2), padding=(1, 4))
-                ),
-                weight_norm(
-                    nn.Conv2d(channels, channels, (3, 9), (1, 2), padding=(1, 4))
-                ),
-                weight_norm(
-                    nn.Conv2d(channels, channels, (3, 3), (1, 1), padding=(1, 1))
-                ),
-            ]
-        )
+
+        def convs():
+            return nn.ModuleList(
+                [
+                    weight_norm(nn.Conv2d(2, channels, (3, 9), (1, 1), padding=(1, 4))),
+                    weight_norm(
+                        nn.Conv2d(channels, channels, (3, 9), (1, 2), padding=(1, 4))
+                    ),
+                    weight_norm(
+                        nn.Conv2d(channels, channels, (3, 9), (1, 2), padding=(1, 4))
+                    ),
+                    weight_norm(
+                        nn.Conv2d(channels, channels, (3, 9), (1, 2), padding=(1, 4))
+                    ),
+                    weight_norm(
+                        nn.Conv2d(channels, channels, (3, 3), (1, 1), padding=(1, 1))
+                    ),
+                ]
+            )
+
         self.band_convs = nn.ModuleList([convs() for _ in range(len(self.bands))])
 
         self.conv_post = weight_norm(
@@ -381,13 +447,14 @@ class MultiBandDiscriminator(nn.Module):
             [DiscriminatorB(window_length=w) for w in self.fft_sizes]
         )
 
-    def forward(self, y: torch.Tensor, y_hat: torch.Tensor) -> Tuple[
+    def forward(
+        self, y: torch.Tensor, y_hat: torch.Tensor
+    ) -> Tuple[
         List[torch.Tensor],
         List[torch.Tensor],
         List[List[torch.Tensor]],
         List[List[torch.Tensor]],
     ]:
-
         y_d_rs = []
         y_d_gs = []
         fmap_rs = []
@@ -511,7 +578,7 @@ class DiscriminatorCQT(nn.Module):
         self.cqtd_normalize_volume = self.cfg.get("cqtd_normalize_volume", False)
         if self.cqtd_normalize_volume:
             print(
-                f"[INFO] cqtd_normalize_volume set to True. Will apply DC offset removal & peak volume normalization in CQTD!"
+                "[INFO] cqtd_normalize_volume set to True. Will apply DC offset removal & peak volume normalization in CQTD!"
             )
 
     def get_2d_padding(
@@ -557,8 +624,8 @@ class DiscriminatorCQT(nn.Module):
             )
         latent_z = torch.cat(latent_z, dim=-1)
 
-        for i, l in enumerate(self.convs):
-            latent_z = l(latent_z)
+        for i, _l in enumerate(self.convs):
+            latent_z = _l(latent_z)
 
             latent_z = self.activation(latent_z)
             fmap.append(latent_z)
@@ -599,13 +666,14 @@ class MultiScaleSubbandCQTDiscriminator(nn.Module):
             ]
         )
 
-    def forward(self, y: torch.Tensor, y_hat: torch.Tensor) -> Tuple[
+    def forward(
+        self, y: torch.Tensor, y_hat: torch.Tensor
+    ) -> Tuple[
         List[torch.Tensor],
         List[torch.Tensor],
         List[List[torch.Tensor]],
         List[List[torch.Tensor]],
     ]:
-
         y_d_rs = []
         y_d_gs = []
         fmap_rs = []
@@ -632,13 +700,14 @@ class CombinedDiscriminator(nn.Module):
         super().__init__()
         self.discrimiantor = nn.ModuleList(list_discriminator)
 
-    def forward(self, y: torch.Tensor, y_hat: torch.Tensor) -> Tuple[
+    def forward(
+        self, y: torch.Tensor, y_hat: torch.Tensor
+    ) -> Tuple[
         List[torch.Tensor],
         List[torch.Tensor],
         List[List[torch.Tensor]],
         List[List[torch.Tensor]],
     ]:
-
         y_d_rs = []
         y_d_gs = []
         fmap_rs = []

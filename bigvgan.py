@@ -1,8 +1,14 @@
-# Copyright (c) 2024 NVIDIA CORPORATION.
-#   Licensed under the MIT license.
+"""BigVGAN neural vocoder model for high-fidelity audio synthesis.
 
-# Adapted from https://github.com/jik876/hifi-gan under the MIT license.
-#   LICENSE is in incl_licenses directory.
+This module implements the BigVGAN architecture, a neural vocoder that uses
+anti-aliased periodic activation functions with multi-periodicity composition
+for high-quality waveform generation from mel spectrograms.
+
+Copyright (c) 2024 NVIDIA CORPORATION. Licensed under the MIT license.
+
+Adapted from https://github.com/jik876/hifi-gan under the MIT license.
+LICENSE is in incl_licenses directory.
+"""
 
 import json
 import os
@@ -14,7 +20,7 @@ import torch.nn as nn
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn.utils import remove_weight_norm
-from torch.nn.utils.parametrizations import spectral_norm, weight_norm
+from torch.nn.utils.parametrizations import weight_norm
 
 import activations
 from alias_free_activation.torch.act import Activation1d as TorchActivation1d
@@ -22,7 +28,15 @@ from env import AttrDict
 from utils import get_padding, init_weights
 
 
-def load_hparams_from_json(path) -> AttrDict:
+def load_hparams_from_json(path):
+    """Load hyperparameters from JSON configuration file.
+
+    Args:
+        path: Path to the JSON configuration file.
+
+    Returns:
+        AttrDict: Hyperparameters as an attribute dictionary.
+    """
     with open(path) as f:
         data = f.read()
     return AttrDict(json.loads(data))
@@ -93,8 +107,9 @@ class AMPBlock1(torch.nn.Module):
 
         # Select which Activation1d, lazy-load cuda version to ensure backward compatibility
         if self.h.get("use_cuda_kernel", False):
-            from alias_free_activation.cuda.activation1d import \
-                Activation1d as CudaActivation1d
+            from alias_free_activation.cuda.activation1d import (
+                Activation1d as CudaActivation1d,
+            )
 
             Activation1d = CudaActivation1d
         else:
@@ -129,6 +144,14 @@ class AMPBlock1(torch.nn.Module):
             )
 
     def forward(self, x):
+        """Forward pass through AMPBlock1.
+
+        Args:
+            x: Input tensor of shape (B, C, T).
+
+        Returns:
+            torch.Tensor: Output tensor of the same shape as input.
+        """
         acts1, acts2 = self.activations[::2], self.activations[1::2]
         for c1, c2, a1, a2 in zip(self.convs1, self.convs2, acts1, acts2):
             xt = a1(x)
@@ -140,10 +163,11 @@ class AMPBlock1(torch.nn.Module):
         return x
 
     def remove_weight_norm(self):
-        for l in self.convs1:
-            remove_weight_norm(l)
-        for l in self.convs2:
-            remove_weight_norm(l)
+        """Remove weight normalization from all convolutional layers."""
+        for _l in self.convs1:
+            remove_weight_norm(_l)
+        for _l in self.convs2:
+            remove_weight_norm(_l)
 
 
 class AMPBlock2(torch.nn.Module):
@@ -192,8 +216,9 @@ class AMPBlock2(torch.nn.Module):
 
         # Select which Activation1d, lazy-load cuda version to ensure backward compatibility
         if self.h.get("use_cuda_kernel", False):
-            from alias_free_activation.cuda.activation1d import \
-                Activation1d as CudaActivation1d
+            from alias_free_activation.cuda.activation1d import (
+                Activation1d as CudaActivation1d,
+            )
 
             Activation1d = CudaActivation1d
         else:
@@ -228,6 +253,14 @@ class AMPBlock2(torch.nn.Module):
             )
 
     def forward(self, x):
+        """Forward pass through AMPBlock2.
+
+        Args:
+            x: Input tensor of shape (B, C, T).
+
+        Returns:
+            torch.Tensor: Output tensor of the same shape as input.
+        """
         for c, a in zip(self.convs, self.activations):
             xt = a(x)
             xt = c(xt)
@@ -235,8 +268,9 @@ class AMPBlock2(torch.nn.Module):
         return x
 
     def remove_weight_norm(self):
-        for l in self.convs:
-            remove_weight_norm(l)
+        """Remove weight normalization from all convolutional layers."""
+        for _l in self.convs:
+            remove_weight_norm(_l)
 
 
 class BigVGAN(
@@ -305,8 +339,9 @@ class BigVGAN(
 
         # Select which Activation1d, lazy-load cuda version to ensure backward compatibility
         if self.h.get("use_cuda_kernel", False):
-            from alias_free_activation.cuda.activation1d import \
-                Activation1d as CudaActivation1d
+            from alias_free_activation.cuda.activation1d import (
+                Activation1d as CudaActivation1d,
+            )
 
             Activation1d = CudaActivation1d
         else:
@@ -389,6 +424,21 @@ class BigVGAN(
         reference_x: Optional[torch.Tensor] = None,
         speed: int = 1.0,
     ):
+        """Generate waveform from mel spectrogram input.
+
+        Args:
+            x: Input mel spectrogram tensor of shape (B, num_mels, T).
+            target_size: Target output frame size. If None, computed from input.
+                Defaults to None.
+            sampling_rate_types: Optional sampling rate type indices for
+                conditional generation. Defaults to None.
+            reference_x: Optional reference mel spectrogram for conditioning.
+                Defaults to None.
+            speed: Playback speed factor affecting output length. Defaults to 1.0.
+
+        Returns:
+            torch.Tensor: Generated waveform of shape (B, 1, T').
+        """
         # Pre-encoder
         if self.preencoder is not None:
             x = self.preencoder(x)
@@ -445,13 +495,18 @@ class BigVGAN(
         return x
 
     def remove_weight_norm(self):
+        """Remove weight normalization from all layers.
+
+        This method should be called before inference for improved performance.
+        Once weight norm is removed, it cannot be reapplied.
+        """
         try:
             print("Removing weight norm...")
-            for l in self.ups:
-                for l_i in l:
-                    remove_weight_norm(l_i)
-            for l in self.resblocks:
-                l.remove_weight_norm()
+            for _l in self.ups:
+                for _l_i in _l:
+                    remove_weight_norm(_l_i)
+            for _l in self.resblocks:
+                _l.remove_weight_norm()
             remove_weight_norm(self.conv_pre)
             remove_weight_norm(self.conv_post)
         except ValueError:
@@ -460,8 +515,14 @@ class BigVGAN(
 
     # Additional methods for huggingface_hub support
     def _save_pretrained(self, save_directory: Path) -> None:
-        """Save weights and config.json from a Pytorch model to a local directory."""
+        """Save model weights and configuration to a local directory.
 
+        This method is used by the Hugging Face Hub integration to save
+        the model in a format that can be loaded later.
+
+        Args:
+            save_directory: Path to the directory where the model will be saved.
+        """
         model_path = save_directory / "bigvgan_generator.pt"
         torch.save({"generator": self.state_dict()}, model_path)
 
@@ -486,7 +547,33 @@ class BigVGAN(
         use_cuda_kernel: bool = False,
         **model_kwargs,
     ):
-        """Load Pytorch pretrained weights and return the loaded model."""
+        """Load pretrained BigVGAN model from local path or Hugging Face Hub.
+
+        Args:
+            pretrained_model_name_or_path: Local directory path or Hugging Face
+                Hub model identifier (e.g., 'nvidia/bigvgan_24khz_100band').
+            revision: Specific model revision to download from the Hub.
+                Defaults to None (latest).
+            cache_dir: Directory to cache downloaded files. Defaults to None.
+            force_download: Force re-download even if files are cached.
+                Defaults to False.
+            proxies: Proxy configuration dictionary. Defaults to None.
+            resume_download: Resume interrupted downloads. Defaults to False.
+            local_files_only: Only use local files, no downloads. Defaults to False.
+            token: Hugging Face authentication token. Defaults to None.
+            map_location: Device to load the model onto. Defaults to 'cpu'.
+            strict: Strict state dict loading. Defaults to False.
+            use_cuda_kernel: Use optimized CUDA kernels for inference.
+                Defaults to False.
+            **model_kwargs: Additional keyword arguments.
+
+        Returns:
+            BigVGAN: Loaded model instance with pretrained weights.
+
+        Note:
+            When use_cuda_kernel=True, nvcc and ninja must be installed
+            and compatible with your PyTorch build.
+        """
         # model_id를 pretrained_model_name_or_path로 변경
         if os.path.isdir(pretrained_model_name_or_path):
             print("Loading config.json from local directory")
@@ -507,13 +594,13 @@ class BigVGAN(
 
         if use_cuda_kernel:
             print(
-                f"[WARNING] You have specified use_cuda_kernel=True during BigVGAN.from_pretrained(). Only inference is supported (training is not implemented)!"
+                "[WARNING] You have specified use_cuda_kernel=True during BigVGAN.from_pretrained(). Only inference is supported (training is not implemented)!"
             )
             print(
-                f"[WARNING] You need nvcc and ninja installed in your system that matches your PyTorch build is using to build the kernel. If not, the model will fail to initialize or generate incorrect waveform!"
+                "[WARNING] You need nvcc and ninja installed in your system that matches your PyTorch build is using to build the kernel. If not, the model will fail to initialize or generate incorrect waveform!"
             )
             print(
-                f"[WARNING] For detail, see the official GitHub repository: https://github.com/NVIDIA/BigVGAN?tab=readme-ov-file#using-custom-cuda-kernel-for-synthesis"
+                "[WARNING] For detail, see the official GitHub repository: https://github.com/NVIDIA/BigVGAN?tab=readme-ov-file#using-custom-cuda-kernel-for-synthesis"
             )
         model = cls(h, use_cuda_kernel=use_cuda_kernel)
 
@@ -543,7 +630,7 @@ class BigVGAN(
             model.load_state_dict(checkpoint_dict["generator"])
         except RuntimeError:
             print(
-                f"[INFO] the pretrained checkpoint does not contain weight norm. Loading the checkpoint after removing weight norm!"
+                "[INFO] the pretrained checkpoint does not contain weight norm. Loading the checkpoint after removing weight norm!"
             )
             model.remove_weight_norm()
             model.load_state_dict(checkpoint_dict["generator"])

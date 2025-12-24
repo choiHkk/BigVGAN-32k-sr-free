@@ -5,9 +5,9 @@
 #   LICENSE is in incl_licenses directory.
 
 
+import logging
 import warnings
 
-warnings.simplefilter(action="ignore", category=FutureWarning)
 import argparse
 import itertools
 import json
@@ -15,7 +15,6 @@ import os
 import time
 
 import auraloss
-import numpy as np
 import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
@@ -28,16 +27,23 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 from bigvgan import BigVGAN
-from discriminators import (MultiBandDiscriminator, MultiPeriodDiscriminator,
-                            MultiResolutionDiscriminator,
-                            MultiScaleSubbandCQTDiscriminator)
+from discriminators import (
+    MultiBandDiscriminator,
+    MultiPeriodDiscriminator,
+    MultiResolutionDiscriminator,
+    MultiScaleSubbandCQTDiscriminator,
+)
 from env import AttrDict, build_env
-from loss import (MultiScaleMelSpectrogramLoss, discriminator_loss,
-                  feature_loss, generator_loss)
+from loss import (
+    MultiScaleMelSpectrogramLoss,
+    discriminator_loss,
+    feature_loss,
+    generator_loss,
+)
 from meldataset import MAX_WAV_VALUE, Collator, get_dataset, mel_spectrogram
-from utils import (load_checkpoint, plot_spectrogram, plot_spectrogram_clipped,
-                   plot_spectrogram_to_numpy, save_checkpoint, scan_checkpoint)
+from utils import load_checkpoint, save_checkpoint, scan_checkpoint
 
+warnings.simplefilter(action="ignore", category=FutureWarning)
 torch.backends.cudnn.benchmark = False
 
 
@@ -260,8 +266,8 @@ def train(rank, a, h):
                     val_pesq_tot += pesq(
                         16000, y_int_16k, y_g_hat_int_16k.squeeze(0), "wb"
                     )
-                except:
-                    pass
+                except Exception as e:
+                    logging.error(f"PESQ calculation failed: {e}")
 
                 # MRSTFT calculation
                 min_t = min(y.size(-1), y_g_hat.size(-1))
@@ -284,7 +290,7 @@ def train(rank, a, h):
                     )
 
                     # Spectrogram of synthesized audio
-                    y_hat_spec = mel_spectrogram(
+                    mel_spectrogram(
                         y_g_hat.squeeze(1),
                         h.n_fft,
                         h.num_mels,
@@ -384,9 +390,7 @@ def train(rank, a, h):
             grad_norm_mpd = torch.nn.utils.clip_grad_norm_(
                 mpd.parameters(), clip_grad_norm
             )
-            grad_norm_mrd = torch.nn.utils.clip_grad_norm_(
-                mrd.parameters(), clip_grad_norm
-            )
+            torch.nn.utils.clip_grad_norm_(mrd.parameters(), clip_grad_norm)
             optim_d.step()
 
             # Generator
